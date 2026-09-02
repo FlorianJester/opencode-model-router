@@ -1,0 +1,8 @@
+{
+  "lite": "",
+  "medium": "",
+  "heavy": "",
+  "deny": ["google/*gemini*", "google-vertex/*gemini*", "xai/*"],
+  "liteDeny": [],
+  "heavyDeny": []
+}

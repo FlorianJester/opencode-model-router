@@ -1,0 +1,11 @@
+{
+  "name": "opencode-model-router",
+  "version": "1.0.0",
+  "description": "OpenCode plugin that auto-selects lite/medium/heavy worker models from the models.dev catalog for your available providers, with deny-list and manual-override support.",
+  "type": "module",
+  "main": "plugin.ts",
+  "license": "MIT",
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.18.0"
+  }
+}
