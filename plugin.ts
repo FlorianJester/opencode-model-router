@@ -4,14 +4,19 @@ import {
   filterToolCalling,
   flattenModels,
   selectTierModels,
+  type BenchmarkTable,
   type ModelsDevCatalog,
   type ModelEntry,
+  type ScoredModelEntry,
+  type TierFloors,
 } from "./lib/model-selector.ts";
 
 const TIERS_PATH = `${process.env.HOME}/.config/opencode/model-tiers.json`;
 const CACHE_PATH = `${process.env.HOME}/.cache/opencode/model-prices.json`;
 const AUTH_PATH = `${process.env.HOME}/.local/share/opencode/auth.json`;
 const MODELS_URL = "https://models.dev/api.json";
+/** Versioned with the plugin: capability scores for the models.dev catalog. */
+const BENCHMARKS_PATH = new URL("./benchmarks.json", import.meta.url);
 
 /**
  * Built-in blacklist applied on machines that have no model-tiers.json yet.
@@ -28,6 +33,8 @@ type TierFile = {
   deny?: string[];
   liteDeny?: string[];
   heavyDeny?: string[];
+  /** Capability floors (0-100). Omitted = derived from the scored cohort. */
+  floors?: TierFloors;
 };
 
 type Client = PluginInput["client"];
@@ -49,7 +56,7 @@ async function writeFile(path: string, content: string) {
   }
 }
 
-async function readFile(path: string): Promise<string | undefined> {
+async function readFile(path: string | URL): Promise<string | undefined> {
   if (hasBun) {
     try {
       return await Bun.file(path).text();
@@ -96,6 +103,52 @@ function isManual(value: string | undefined): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+/** Hand-maintained capability table; absent/corrupt means "fall back to price". */
+async function readBenchmarks(): Promise<BenchmarkTable | undefined> {
+  const raw = await readFile(BENCHMARKS_PATH);
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw) as BenchmarkTable;
+  } catch {
+    return undefined;
+  }
+}
+
+const BENCHMARK_STALE_DAYS = 120;
+
+/** Warn when the hand-maintained table has drifted out of relevance. */
+function stalenessWarning(table: BenchmarkTable | undefined): string | undefined {
+  if (!table?.updated) return undefined;
+  const ageMs = Date.now() - Date.parse(table.updated);
+  if (!Number.isFinite(ageMs) || ageMs <= 0) return undefined;
+  const days = Math.floor(ageMs / 86_400_000);
+  return days >= BENCHMARK_STALE_DAYS
+    ? `benchmark table is ${days} days old (updated ${table.updated}); re-check it against models.dev`
+        : undefined;
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Log-safe gap listing: the full set is long and only the count matters there. */
+function describeGaps(gaps: string[], limit = 8): string {
+  if (gaps.length === 0) return "";
+  const head = gaps.slice(0, limit).join(", ");
+  return gaps.length > limit ? `${head}, +${gaps.length - limit} more` : head;
+}
+
+/** One-line provenance for a scored pick: why this model, per the table. */
+function describeEntry(entry: ScoredModelEntry | undefined, table: BenchmarkTable | undefined): string | undefined {
+  if (!entry) return undefined;
+  const bits: string[] = [];
+  if (typeof entry.capability === "number") bits.push(`score ${round2(entry.capability)}`);
+  bits.push(`$${round2(entry.price)}/Mtok`);
+  const record = table?.models?.[`${entry.providerID}/${entry.modelID}`];
+  const basis = record ? Object.keys(record.scores) : [];
+  if (basis.length > 0) bits.push(`basis ${basis.join("+")}`);
+  if (entry.released) bits.push(`released ${new Date(entry.released).toISOString().slice(0, 10)}`);
+  return bits.join(", ");
+}
+
 /**
  * Resolve the list of usable provider IDs.
  *
@@ -138,24 +191,41 @@ async function listAvailableProviders(
   return { providers: [...ids], source: "local" };
 }
 
-async function resolveTiers(client: Client, config?: { provider?: Record<string, unknown> }): Promise<{
+type TierResolution = {
   tiers: { lite?: string; medium?: string; heavy?: string };
   sources: { lite: string; medium: string; heavy: string };
+  /** Provenance per tier, e.g. "score 84.29, $0.75/Mtok, basis tb21+deepswe11". */
+  detail: { lite?: string; medium?: string; heavy?: string };
+  strategy: "capability" | "price";
+  floors?: { lite: number; medium: number; heavy: number };
+  /** In-scope models the benchmark table never scored (router cannot pick them). */
+  gaps: string[];
+  /** Scored models pruned as beaten on capability, price and recency at once. */
+  dominated: string[];
+  warnings: string[];
   providers: string[];
   providerSource: string;
-}> {
+};
+
+async function resolveTiers(
+  client: Client,
+  config?: { provider?: Record<string, unknown> },
+): Promise<TierResolution> {
   const catalog = await fetchCatalog();
   const file = await readTiers();
   const { providers, source: providerSource } = await listAvailableProviders(
     client,
     config,
   );
+  const table = await readBenchmarks();
   const entries = filterFree(filterToolCalling(flattenModels(catalog)));
   const chosen = selectTierModels(entries, {
     providers,
     deny: file.deny ?? DEFAULT_DENY,
     liteDeny: file.liteDeny ?? [],
     heavyDeny: file.heavyDeny ?? [],
+    benchmarks: table,
+    floors: file.floors,
   });
 
   const pick = (key: "lite" | "medium" | "heavy") => {
@@ -170,10 +240,23 @@ async function resolveTiers(client: Client, config?: { provider?: Record<string,
   const lite = pick("lite");
   const medium = pick("medium");
   const heavy = pick("heavy");
+  const warnings = [...chosen.warnings];
+  const stale = stalenessWarning(table);
+  if (stale) warnings.push(stale);
 
   return {
     tiers: { lite: lite.value, medium: medium.value, heavy: heavy.value },
     sources: { lite: lite.source, medium: medium.source, heavy: heavy.source },
+    detail: {
+      lite: describeEntry(chosen.lite, table),
+      medium: describeEntry(chosen.medium, table),
+      heavy: describeEntry(chosen.heavy, table),
+    },
+    strategy: chosen.strategy,
+    floors: chosen.floors,
+    gaps: chosen.gaps,
+    dominated: chosen.dominated,
+    warnings,
     providers,
     providerSource,
   };
@@ -191,10 +274,8 @@ export const ModelRouterPlugin: Plugin = async ({ client }) => {
   return {
     config: async (config) => {
       try {
-        const { tiers, sources, providers, providerSource } = await resolveTiers(
-          client,
-          config,
-        );
+        const res = await resolveTiers(client, config);
+        const { tiers, sources, detail, strategy, floors } = res;
         for (const [agent, model] of [
           ["worker-lite", tiers.lite],
           ["worker-medium", tiers.medium],
@@ -205,10 +286,11 @@ export const ModelRouterPlugin: Plugin = async ({ client }) => {
           config.agent[agent] ??= {};
           config.agent[agent].model = model;
         }
-        // Only persist the deny lists here: lite/medium/heavy slots are
-        // reserved for MANUAL overrides, so auto-selected tiers must never be
-        // written back (they would be mistaken for manual pins on the next
+        // Only persist the deny lists and floors here: lite/medium/heavy slots
+        // are reserved for MANUAL overrides, so auto-selected tiers must never
+        // be written back (they would be mistaken for manual pins on the next
         // launch and would bypass the deny lists).
+        const file = await readTiers();
         await writeFile(
           TIERS_PATH,
           JSON.stringify(
@@ -216,16 +298,28 @@ export const ModelRouterPlugin: Plugin = async ({ client }) => {
               lite: "",
               medium: "",
               heavy: "",
-              deny: (await readTiers()).deny ?? DEFAULT_DENY,
-              liteDeny: (await readTiers()).liteDeny ?? [],
-              heavyDeny: (await readTiers()).heavyDeny ?? [],
+              deny: file.deny ?? DEFAULT_DENY,
+              liteDeny: file.liteDeny ?? [],
+              heavyDeny: file.heavyDeny ?? [],
+              ...(file.floors ? { floors: file.floors } : {}),
             },
             null,
             2,
           ),
         );
+        const describe = (key: "lite" | "medium" | "heavy") =>
+          `${key}=${tiers[key]} (${sources[key]}${detail[key] ? `; ${detail[key]}` : ""})`;
+        const gapPreview = describeGaps(res.gaps);
+        const dominatedPreview = describeGaps(res.dominated);
         await log(
-          `model-router: lite=${tiers.lite} (${sources.lite}), medium=${tiers.medium} (${sources.medium}), heavy=${tiers.heavy} (${sources.heavy}). Available providers (${providerSource}): ${providers.join(", ")}`,
+          `model-router: strategy=${strategy}${floors ? ` floors=${round2(floors.lite)}/${round2(floors.medium)}/${round2(floors.heavy)}` : ""}. ` +
+            `${describe("heavy")}, ${describe("medium")}, ${describe("lite")}. ` +
+            `Providers (${res.providerSource}): ${res.providers.join(", ")}.` +
+            (gapPreview ? ` Unscored in scope (never routed): ${gapPreview}.` : "") +
+            (dominatedPreview
+              ? ` Dominated in scope (never routed): ${dominatedPreview}.`
+              : "") +
+            (res.warnings.length > 0 ? ` WARNINGS: ${res.warnings.join(" | ")}` : ""),
         );
       } catch (err) {
         await log(
@@ -239,16 +333,19 @@ export const ModelRouterPlugin: Plugin = async ({ client }) => {
           "List currently available provider models and the current worker tier assignments (worker-lite/medium/heavy). Use before dispatching a worker subagent to pick the right tier.",
         args: {},
         async execute() {
-          const { tiers, sources, providers, providerSource } = await resolveTiers(
-            client,
-            undefined,
-          );
+          const res = await resolveTiers(client, undefined);
           return JSON.stringify(
             {
-              availableProviders: providers,
-              providerSource,
-              tiers,
-              sources,
+              availableProviders: res.providers,
+              providerSource: res.providerSource,
+              strategy: res.strategy,
+              floors: res.floors,
+              tiers: res.tiers,
+              sources: res.sources,
+              detail: res.detail,
+              unscoredInScope: res.gaps,
+              dominatedInScope: res.dominated,
+              warnings: res.warnings,
             },
             null,
             2,

@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "updated": "2026-09-21",
+  "notes": [
+    "Capability = weighted mean over benchmark FAMILIES. Weights are relative and are",
+    "renormalised over the families a model actually reports.",
+    "A family scores exactly ONE benchmark - its first available member - so two",
+    "incomparable versions of the same benchmark can never be blended.",
+    "A model is scored only if it reports at least `minFamilies` families AND at least",
+    "one family listed in `core`. Everything else stays unscored and is never routed",
+    "by capability (missing evidence must not renormalise into a high score).",
+    "`advisory` numbers are recorded for humans and NEVER feed the score.",
+    "terminalBench scores TB2.1 alone: it is the version every model in this cohort",
+    "reports. TB4.0 and TB3.0 live under `advisory` because BenchLandscape forbids",
+    "mixing TB 2.x with 4.x, and TB3.0 ordering contradicts TB2.1 (kimi-k3: 88.3 on",
+    "TB2.1 vs 17.4 on TB3.0). When the cohort moves to TB4.0, change the single",
+    "member in `families.terminalBench.members` - never add a second version."
+  ],
+  "minFamilies": 2,
+  "core": ["terminalBench", "deepswe"],
+  "families": {
+    "terminalBench": { "weight": 40, "members": ["tb21"] },
+    "deepswe": { "weight": 25, "members": ["deepswe11"] },
+    "livecodebench": { "weight": 15, "members": ["lcb"] },
+    "swePro": { "weight": 10, "members": ["swePro"] },
+    "frontierSwe": { "weight": 10, "members": ["frontierSwe"] }
+  },
+  "sources": {
+    "scores-frontier": "BenchLandscape 'ScoresFrontier' - independent third-party re-run of frontier vendor tables",
+    "scores-mid-tier": "BenchLandscape 'ScoresMidTier' - vendor-reported figures, independently re-published",
+    "artificial-analysis": "Artificial Analysis - independent first-party re-run"
+  },
+  "models": {
+    "opencode-go/deepseek-v4.1-flash": {
+      "source": "scores-frontier",
+      "scores": { "tb21": 90.6, "deepswe11": 74.2 },
+      "advisory": { "tb40": 31.2, "tb30": 30.0, "nl2repo": 65.4 }
+    },
+    "opencode-go/muse-spark-1.3-contributor": {
+      "source": "scores-mid-tier",
+      "scores": { "tb21": 88.8, "deepswe11": 75.4 },
+      "advisory": { "sweAtlasQnA": 59.4, "aaSwe1": 83.4 }
+    },
+    "opencode-go/grok-4.6": {
+      "source": "artificial-analysis",
+      "scores": { "tb21": 88.4 }
+    },
+    "opencode-go/glm-5.3": {
+      "source": "scores-frontier",
+      "scores": { "tb21": 88.2, "deepswe11": 66.9, "frontierSwe": 78.1 },
+      "advisory": { "tb30": 28.3, "sweMarathon": 42.5 }
+    },
+    "opencode-go/kimi-k3": {
+      "source": "scores-frontier",
+      "scores": { "tb21": 88.3, "deepswe11": 67.5 },
+      "advisory": { "tb30": 17.4, "sweMarathon": 48.1 }
+    },
+    "opencode-go/deepseek-v4-pro": {
+      "source": "scores-frontier",
+      "scores": { "tb21": 87.9 },
+      "advisory": { "deepswe": 62.7 }
+    },
+    "opencode-go/muse-spark-1.2-contributor": {
+      "source": "scores-mid-tier",
+      "scores": { "tb21": 86.8, "deepswe11": 55.0 },
+      "advisory": { "aaSwe1": 83.4 }
+    },
+    "opencode-go/qwen3.8-max": {
+      "source": "scores-frontier",
+      "scores": { "tb21": 86.6, "deepswe11": 56.6, "swePro": 67.7 }
+    },
+    "opencode-go/hy4-preview": {
+      "source": "scores-mid-tier",
+      "scores": { "tb21": 85.4 },
+      "advisory": { "deepswe": 64.3 }
+    },
+    "opencode-go/glm-5.3-flash": {
+      "source": "scores-frontier",
+      "scores": { "tb21": 84.3, "deepswe11": 63.4 }
+    },
+    "opencode-go/glm-5.2": {
+      "source": "scores-frontier",
+      "scores": { "tb21": 81.0, "deepswe11": 46.2, "swePro": 62.1 }
+    },
+    "opencode-go/minimax-m2.5": {
+      "source": "scores-mid-tier",
+      "scores": { "tb21": 80.5 }
+    },
+    "opencode-go/deepseek-v4-flash": {
+      "source": "scores-frontier",
+      "scores": { "tb21": 73.0 },
+      "advisory": { "deepswe": 54.4 }
+    },
+    "opencode-go/qwen3.8-flash": {
+      "source": "scores-frontier",
+      "scores": { "deepswe11": 58.7, "swePro": 62.5 }
+    }
+  }
+}
