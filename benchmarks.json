@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-09-21",
+  "updated": "2026-11-06",
   "notes": [
     "Capability = weighted mean over benchmark FAMILIES. Weights are relative and are",
     "renormalised over the families a model actually reports.",
@@ -14,7 +14,12 @@
     "reports. TB4.0 and TB3.0 live under `advisory` because BenchLandscape forbids",
     "mixing TB 2.x with 4.x, and TB3.0 ordering contradicts TB2.1 (kimi-k3: 88.3 on",
     "TB2.1 vs 17.4 on TB3.0). When the cohort moves to TB4.0, change the single",
-    "member in `families.terminalBench.members` - never add a second version."
+    "member in `families.terminalBench.members` - never add a second version.",
+    "Rows are keyed by provider/model. `mistral/*` rows are model-level figures from",
+    "the cited source; Mistral's serving of the same weights was not re-run, so read",
+    "them as the model's capability, not the provider's. Models that report only one",
+    "family (deepseek-v4-1-flash-1017, mistral-large-4: DeepSWE but no TB2.1) stay",
+    "unscored and are never routed; their TB4.0 numbers live under `advisory`."
   ],
   "minFamilies": 2,
   "core": ["terminalBench", "deepswe"],
@@ -28,7 +33,9 @@
   "sources": {
     "scores-frontier": "BenchLandscape 'ScoresFrontier' - independent third-party re-run of frontier vendor tables",
     "scores-mid-tier": "BenchLandscape 'ScoresMidTier' - vendor-reported figures, independently re-published",
-    "artificial-analysis": "Artificial Analysis - independent first-party re-run"
+    "artificial-analysis": "Artificial Analysis - independent first-party re-run",
+    "llm-stats": "LLM Stats - aggregated public leaderboards; self-reported where the benchmark page marks them so",
+    "benchmarklist": "BenchmarkList - per-model index over Vals AI and Artificial Analysis first-party runs"
   },
   "models": {
     "opencode-go/deepseek-v4.1-flash": {
@@ -94,6 +101,40 @@
     "opencode-go/qwen3.8-flash": {
       "source": "scores-frontier",
       "scores": { "deepswe11": 58.7, "swePro": 62.5 }
+    },
+    "mistral/zai-glm-5-3": {
+      "source": "llm-stats",
+      "scores": { "tb21": 88.2, "deepswe11": 66.9 }
+    },
+    "mistral/zai-glm-5-3-flash": {
+      "source": "llm-stats",
+      "scores": { "tb21": 84.3, "deepswe11": 63.4 }
+    },
+    "mistral/zai-glm-5-2": {
+      "source": "llm-stats",
+      "scores": { "tb21": 82.7, "deepswe11": 44.0 }
+    },
+    "mistral/glm-5-2": {
+      "source": "llm-stats",
+      "scores": { "tb21": 82.7, "deepswe11": 44.0 }
+    },
+    "mistral/devstral-2512": {
+      "source": "benchmarklist",
+      "scores": { "tb21": 30.3, "lcb": 51.8 }
+    },
+    "mistral/mistral-large-2512": {
+      "source": "benchmarklist",
+      "scores": { "tb21": 12.0, "lcb": 55.3 }
+    },
+    "mistral/mistral-large-4": {
+      "source": "llm-stats",
+      "scores": { "deepswe11": 61.7 },
+      "advisory": { "tb40": 28.3 }
+    },
+    "mistral/deepseek-v4-1-flash-1017": {
+      "source": "llm-stats",
+      "scores": { "deepswe11": 77.0 },
+      "advisory": { "tb40": 42.3 }
     }
   }
 }
