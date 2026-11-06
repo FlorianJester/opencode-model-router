@@ -12,7 +12,8 @@ tier is assigned by what it is *for*, above a capability floor:
 - **lite** → cheapest model that clears the floor, capped at medium's pick
   (freshness breaks price ties)
 - **medium** → best capability per dollar above the floor
-- **heavy** → strongest model available, newest among equals
+- **heavy** → strongest model available, newest among equals, subject to the
+  budget guard below
 
 Floors default to quantiles of the scored cohort in scope (p25 / p50 / max) and
 can be pinned per tier. Tiers are filled strongest-first — heavy reserves the top
@@ -21,7 +22,7 @@ model, medium takes the best value left, and lite may then only pick something
 `medium` ≤ `heavy`) and a cheap tier can never outrank the workhorse tier. Every
 pick is logged with its score, price, benchmark basis and release date.
 
-Two rules keep the result honest rather than merely distinct:
+Three rules keep the result honest rather than merely distinct:
 
 - **Dominated models are pruned before selection.** A model that another one
   beats on *all three* axes at once — at least as capable, no more expensive, and
@@ -32,6 +33,13 @@ Two rules keep the result honest rather than merely distinct:
   clears the floor is no stronger and no cheaper than one already assigned to a
   stronger tier, the tier reuses that model (and warns) instead of paying more
   for less. Tiers only stay distinct when distinctness is worth its price.
+- **A big premium for a few points loses the tier.** `heavy` is the only tier
+  that ignores price, so its pick is re-checked once the tiers are filled: if a
+  model no more than 5 capability points weaker costs a third of the price or
+  less, it takes the tier and the premium is logged. The swap happens after
+  filling so it cannot starve medium/lite of the model they were priced against,
+  and medium follows heavy down when the swap would otherwise leave it stronger
+  than heavy. Set the thresholds in `VALUE_GUARD` (`lib/model-selector.ts`).
 
 Other properties:
 

@@ -258,6 +258,18 @@ const RANKING: Record<
     fullID(a).localeCompare(fullID(b)),
 };
 
+/**
+ * Price sanity check on the heavy pick.
+ *
+ * Capability ranking alone will happily pay 9x for four points, because it has
+ * no notion of budget. Heavy is therefore rejected when a rival no more than
+ * `minCapabilityGain` points weaker costs at most 1/`maxPriceRatio` of it: the
+ * premium buys too little to be worth the tier. The rival may sit below the
+ * floor and may already be assigned elsewhere - a cheaper adequate model is the
+ * better buy either way, and the warning records the shortfall.
+ */
+const VALUE_GUARD = { maxPriceRatio: 3, minCapabilityGain: 5 };
+
 /** Nearest-rank quantile of an ascending array. */
 function quantile(ascending: number[], q: number): number {
   if (ascending.length === 0) return 0;
@@ -324,6 +336,11 @@ function selectByPrice(
  *
  * Dominated models are pruned before any tier is filled (see `dominates`), so a
  * stale model is never chosen while a same-price, stronger, newer one exists.
+ *
+ * The heavy pick then passes the budget guard (see `VALUE_GUARD`): a model that
+ * costs 3x a rival within 5 capability points of it loses the tier to that
+ * rival, even when the rival is below the floor. Heavy is the only tier that
+ * ignores price; this is the one place price is allowed to veto capability.
  */
 export function selectTierModels(
   entries: ModelEntry[],
@@ -464,14 +481,54 @@ export function selectTierModels(
   const medium = pick("medium");
   const lite = pick("lite", medium?.capability);
 
+  // Budget guard. `heavy` is the only tier that ignores price, so its premium
+  // is re-checked against the models the cohort already proved adequate: if a
+  // rival no more than `minCapabilityGain` points weaker costs at most
+  // 1/`maxPriceRatio` of the pick, the premium buys too little and the rival
+  // takes the tier. Applied after the tiers are filled so the swap cannot
+  // starve `medium`/`lite` of the model they were priced against.
+  let heavyPick = heavy;
+  if (heavy) {
+    const rival = live
+      .filter((e) => e !== heavy && !matchesDeny(fullID(e), opts.heavyDeny))
+      .filter((e) => e.price * VALUE_GUARD.maxPriceRatio <= heavy.price + EPS)
+      .filter(
+        (e) =>
+          (e.capability as number) >=
+          (heavy.capability as number) - VALUE_GUARD.minCapabilityGain - EPS,
+      )
+      .sort(
+        (a, b) =>
+          (b.capability ?? 0) - (a.capability ?? 0) ||
+          a.price - b.price ||
+          fullID(a).localeCompare(fullID(b)),
+      )[0];
+    if (rival) {
+      warnings.push(
+        `heavy: ${fullID(heavy)} costs ${round2(heavy.price / rival.price)}x ` +
+          `${fullID(rival)} for ${round2((heavy.capability as number) - (rival.capability as number))} ` +
+          `more points; using ${fullID(rival)} (${round2(rival.capability as number)}, ` +
+          `$${rival.price}/Mtok)`,
+      );
+      heavyPick = rival;
+    }
+  }
+  // The guard can pull heavy under medium's pick; capability stays monotone by
+  // letting medium follow, since a model not worth its premium for heavy is not
+  // worth it for the workhorse tier either.
+  const mediumPick =
+    medium && heavyPick && (medium.capability as number) > (heavyPick.capability as number) + EPS
+      ? heavyPick
+      : medium;
+
   const gaps = opts.benchmarks
     ? candidates.filter((e) => typeof e.capability !== "number").map(fullID)
     : [];
 
   return {
     lite,
-    medium,
-    heavy,
+    medium: mediumPick,
+    heavy: heavyPick,
     strategy: "capability",
     floors,
     gaps,

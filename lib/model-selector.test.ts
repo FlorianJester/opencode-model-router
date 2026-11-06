@@ -206,13 +206,14 @@ describe("capability floors", () => {
   test("each tier applies its own objective", () => {
     const { lite, medium, heavy, strategy, warnings } = select();
     assert.equal(strategy, "capability");
-    assert.deepEqual(warnings, []);
     // lite: cheapest adequate model, freshness breaking the twin tie.
     assert.equal(lite?.modelID, "adept-new");
     // medium: best capability per dollar (value 84/0.6 beats strong-cheap 88/0.7).
     assert.equal(medium?.modelID, "value");
-    // heavy: maximum capability, freshness breaking the 92/92 tie.
-    assert.equal(heavy?.modelID, "strong-newest");
+    // heavy: maximum capability, freshness breaking the 92/92 tie - then the
+    // budget guard refuses 8.6x the price for 4 points.
+    assert.equal(heavy?.modelID, "strong-cheap");
+    assert.ok(warnings.some((w) => w.startsWith("heavy: bench/strong-newest costs")));
   });
 
   test("the priciest model is never promoted for being priciest", () => {
@@ -222,13 +223,19 @@ describe("capability floors", () => {
   });
 
   test("tiers stay distinct and clear their floors", () => {
-    const { lite, medium, heavy, floors } = select();
+    const { lite, medium, heavy, floors, warnings } = select();
     assert.deepEqual(floors, { lite: 80, medium: 84, heavy: 92 });
     const ids = [lite!.modelID, medium!.modelID, heavy!.modelID];
     assert.equal(new Set(ids).size, 3);
     assert.ok((lite!.capability as number) >= floors!.lite);
     assert.ok((medium!.capability as number) >= floors!.medium);
-    assert.ok((heavy!.capability as number) >= floors!.heavy);
+    // heavy is the one tier the budget guard may pull under its floor, and it
+    // must say so when it does.
+    assert.ok(
+      (heavy!.capability as number) >= floors!.heavy ||
+        warnings.some((w) => w.startsWith("heavy:")),
+      "heavy must clear its floor or record why it did not",
+    );
   });
 
   test("evidence-poor models are never routed and are reported as gaps", () => {
@@ -250,7 +257,7 @@ describe("capability floors", () => {
     });
     // tb40-only scores 99 on the excluded version; it must not become the fallback.
     assert.notEqual(picked.heavy?.modelID, "tb40-only");
-    assert.equal(picked.heavy?.modelID, "strong-newest");
+    assert.equal(picked.heavy?.modelID, "strong-cheap");
   });
 
   test("an unreachable floor falls back to the best available and warns", () => {
@@ -260,7 +267,7 @@ describe("capability floors", () => {
       benchmarks: table,
       floors: { heavy: 99 },
     });
-    assert.equal(heavy?.modelID, "strong-newest");
+    assert.equal(heavy?.modelID, "strong-cheap");
     assert.ok(warnings.some((w) => w.includes("heavy") && w.includes("99")));
   });
 
@@ -277,7 +284,7 @@ describe("capability floors", () => {
     // buying `weak-expensive` ($50/Mtok for score 60) just to stay distinct.
     assert.equal(medium?.modelID, "adept-new");
     assert.equal(lite?.modelID, "adept-new");
-    assert.equal(heavy?.modelID, "strong-newest");
+    assert.equal(heavy?.modelID, "strong-cheap");
     assert.ok(warnings.some((w) => w.startsWith("lite: reuses")));
   });
 
@@ -436,5 +443,80 @@ describe("matchesDeny", () => {
     assert.equal(lite?.providerID, "opencode-go");
     assert.equal(medium?.providerID, "opencode-go");
     assert.equal(heavy?.providerID, "opencode-go");
+  });
+});
+
+describe("budget guard", () => {
+  const guardTable = {
+    version: 1,
+    minFamilies: 2,
+    core: ["agentic"],
+    families: {
+      agentic: { weight: 40, members: ["tb21"] },
+      swe: { weight: 25, members: ["deepswe11"] },
+    },
+  };
+
+  const pickHeavy = (models: Record<string, { cap: number; price: number }>) => {
+    const catalog = { guard: { models: {} as Record<string, unknown> } };
+    const scores: Record<string, { source: string; scores: Record<string, number> }> = {};
+    for (const [id, { cap, price }] of Object.entries(models)) {
+      catalog.guard.models[id] = {
+        cost: { input: price / 2, output: price / 2 },
+        tool_call: true,
+        release_date: "2026-05-01",
+      };
+      scores[`guard/${id}`] = { source: "test", scores: { tb21: cap, deepswe11: cap } };
+    }
+    return selectTierModels(flattenModels(catalog as never), {
+      providers: ["guard"],
+      liteDeny: [],
+      benchmarks: { ...guardTable, models: scores },
+    });
+  };
+
+  test("a large premium for a few points loses the tier", () => {
+    const { heavy, warnings } = pickHeavy({
+      top: { cap: 92, price: 6 },
+      near: { cap: 88, price: 0.6 },
+      mid: { cap: 84, price: 1 },
+    });
+    assert.equal(heavy?.modelID, "near");
+    assert.ok(
+      warnings.some((w) =>
+        w.startsWith("heavy: guard/top costs 10x guard/near for 4 more points; using guard/near"),
+      ),
+      warnings.join("\n"),
+    );
+  });
+
+  test("a small premium for a small gain is kept", () => {
+    // 2.5x the price for half a point is under the guard's ratio.
+    const { heavy } = pickHeavy({
+      top: { cap: 92, price: 0.75 },
+      near: { cap: 91.5, price: 0.3 },
+    });
+    assert.equal(heavy?.modelID, "top");
+  });
+
+  test("a big premium for a real gain is kept", () => {
+    // 6x the price, but 9 points stronger: worth it.
+    const { heavy } = pickHeavy({
+      top: { cap: 92, price: 6 },
+      near: { cap: 83, price: 1 },
+    });
+    assert.equal(heavy?.modelID, "top");
+  });
+
+  test("medium follows heavy down so capability stays monotone", () => {
+    const { lite, medium, heavy } = pickHeavy({
+      top: { cap: 92, price: 6 },
+      near: { cap: 88, price: 0.6 },
+      mid: { cap: 84, price: 1 },
+    });
+    assert.equal(heavy?.modelID, "near");
+    assert.equal(medium?.modelID, "near");
+    assert.ok((lite!.capability as number) <= (medium!.capability as number));
+    assert.ok((medium!.capability as number) <= (heavy!.capability as number));
   });
 });
